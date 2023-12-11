@@ -19,7 +19,7 @@ class User:
         total_deposit = sum([denomination * count for denomination, count in denominations.items()])
         if total_deposit <= 100000:
             self.balance += total_deposit
-            self._update_transaction_history(f"Deposited ${total_deposit} on {self._current_time()}")
+            self._update_transaction_history(f"Deposited ${total_deposit} on {self._current_time()}", denominations)
             return True
         else:
             print("Exceeded maximum deposit limit.")
@@ -58,34 +58,46 @@ class User:
     def _current_time(self):
         return datetime.datetime.now().strftime("%Y-%m-%d at %H:%M:%S")
 
-    def _update_transaction_history(self, transaction):
-        self.transaction_history.append(transaction)
+    def _update_transaction_history(self, transaction, denominations=None):
+        transaction_data = {"transaction": transaction, "denominations": denominations}
+        self.transaction_history.append(transaction_data)
 
 
 class Admin(User):
     MAX_BALANCE = 300000
-    MAX_DEPOSIT = 300000
 
-    def __init__(self, user_id, password):
+    def __init__(self, user_id, password, users):
         super().__init__(user_id, password)
+        self.users = users
+
+    def admin_menu(self):
+        last_interaction_time = time.time()
+
+        while True:
+            print("\n------Admin Menu------")
+            print("\n(1) Total Balance\n(2) Notify Low Balance\n(3) Logout")
+            admin_choice = input("\n=> Enter your choice: ")
+
+            if admin_choice == "1":
+                total_balance = self.total_balance({user_id: user.check_balance() for user_id, user in self.users.items()})
+                print("Total Balance: $", total_balance)
+            elif admin_choice == "2":
+                self.notify_low_balance()
+            elif admin_choice == "3":
+                print("\n<<Admin Logout successful!>>")
+                return True  # Break out of the admin menu
+            else:
+                print("\n<<Invalid choice. Please try again.>>")
+
+            if self.check_timeout(last_interaction_time):
+                return False  # Break out of the admin menu
 
     def total_balance(self, user_balances):
-        total_balance = sum(user_balances.values())
+        total_balance = 0
+        for user_id, balance in user_balances.items():
+            total_balance += balance
         return total_balance
 
-    def total_deposit(self, deposits):
-        total_deposit = sum([sum([denomination * count for denomination, count in deposit.items()]) for deposit in deposits])
-        return total_deposit
-
-    def cash_deposit(self, amount, denominations):
-        total_deposit = sum([denomination * count for denomination, count in denominations.items()])
-        if total_deposit <= self.MAX_DEPOSIT:
-            self.balance += total_deposit
-            self._update_transaction_history(f"Admin deposited ${total_deposit} on {self._current_time()}")
-            return True
-        else:
-            print("Exceeded maximum deposit limit for admin.")
-            return False
 
     def notify_low_balance(self):
         if self.balance < 75000:
@@ -97,7 +109,7 @@ class ATM:
 
     def __init__(self):
         self.users = {}
-        self.admin = Admin("admin", "admin_pass")
+        self.admin = Admin("admin", "admin_pass", self.users)
         self.load_data()
 
     def load_data(self):
@@ -120,10 +132,10 @@ class ATM:
 
     def save_data(self):
         data = {"admin": {
-                    "password": self.admin.password,
-                    "balance": self.admin.balance,
-                    "transaction_history": self.admin.transaction_history
-                }}
+            "password": self.admin.password,
+            "balance": self.admin.balance,
+            "transaction_history": self.admin.transaction_history
+        }}
         for user_id, user in self.users.items():
             data[user_id] = {
                 "password": user.password,
@@ -164,14 +176,16 @@ class ATM:
         if user and not user.is_locked:
             if user.password == password:
                 user.login_attempts = 0
-                return user
+                return user if user_id != "admin" else self.admin
             else:
                 user.login_attempts += 1
-                if user.login_attempts >= 3:
-                    user.is_locked = True
-                    print("Account locked due to multiple login failures.")
-                else:
-                    print("Invalid Password. Attempts remaining:", 3 - user.login_attempts)
+            if user.login_attempts >= 3:
+                user.is_locked = True
+                print("Account locked due to multiple login failures.")
+            else:
+                print("Invalid Password. Attempts remaining:", 3 - user.login_attempts)
+        elif user_id == "admin" and password == self.admin.password:
+            return self.admin
         elif user and user.is_locked:
             print("Account is locked. Please contact customer support.")
         else:
@@ -188,32 +202,22 @@ class ATM:
 
         while True:
             print("\n------Admin Menu------")
-            print("\n(1) Total Balance\n(2) Total Deposit\n(3) Admin Deposit\n(4) Notify Low Balance\n(5) Logout")
+            print("\n(1) Total Balance\n(2) Notify Low Balance\n(3) Logout")
             admin_choice = input("\n=> Enter your choice: ")
 
             if admin_choice == "1":
-                total_balance = self.admin.total_balance({user_id: user.balance for user_id, user in self.users.items()})
+                total_balance = self.admin.total_balance({user_id: user.check_balance() for user_id, user in self.users.items()})
                 print("Total Balance: $", total_balance)
             elif admin_choice == "2":
-                total_deposit = self.admin.total_deposit(
-                    [{denomination: count for denomination, count in json.loads(user_data["transaction_history"])[-1]["denominations"].items()} for user_id, user_data in self.users.items()]
-                )
-                print("Total Deposit: $", total_deposit)
-            elif admin_choice == "3":
-                amount = int(input("Enter deposit amount for admin: $"))
-                denominations = self._get_denominations()
-                if self.admin.cash_deposit(amount, denominations):
-                    print("Admin Deposit successful!")
-            elif admin_choice == "4":
                 self.admin.notify_low_balance()
-            elif admin_choice == "5":
+            elif admin_choice == "3":
                 print("\n<<Admin Logout successful!>>")
-                break
+                return True  # Break out of the admin menu and indicate admin logged out
             else:
                 print("\n<<Invalid choice. Please try again.>>")
 
             if self.check_timeout(last_interaction_time):
-                break
+                return False  # Break out of the admin menu and indicate admin didn't log out
 
     def user_menu(self, user):
         last_interaction_time = time.time()
@@ -251,12 +255,58 @@ class ATM:
                     print("Tag added to the last transaction.")
                 elif user_choice == "7":
                     print("\n<<Logout successful!>>")
-                    break
+                    return True  # Indicate user logged out
                 else:
                     print("\n<<Invalid choice. Please try again.>>")
 
                 if self.check_timeout(last_interaction_time):
-                    break
+                    return False  # Indicate admin didn't log out
+
+    def user_menu(self, user):
+        last_interaction_time = time.time()
+        user_logged_out = False  # Add a flag to track user logout
+
+        while not user_logged_out:
+            print("\n(1) Check Balance\n(2) Deposit\n(3) Withdraw\n(4) Change Password\n(5) Transaction History\n(6) Add Tag to Last Transaction\n(7) Logout")
+            user_choice = input("\n=> Enter your choice: ")
+
+            if user_choice:
+                last_interaction_time = time.time()
+
+            if user_choice == "1":
+                print("Your balance: $", user.check_balance())
+            elif user_choice == "2":
+                amount = int(input("Enter deposit amount: $"))
+                denominations = self._get_denominations()
+                if user.deposit(amount, denominations):
+                    print("Deposit successful!")
+            elif user_choice == "3":
+                amount = int(input("Enter withdrawal amount: $"))
+                denominations = self._get_denominations()
+                if user.withdraw(amount, denominations):
+                    print("Withdrawal successful!")
+                else:
+                    print("\n<<Transaction failed!>>")
+            elif user_choice == "4":
+                current_password = input("Enter current password: ")
+                new_password = input("Enter new password: ")
+                self.change_credentials(user.user_id, current_password, new_password)
+            elif user_choice == "5":
+                self.display_transaction_history(user)
+            elif user_choice == "6":
+                tag = input("Enter tag for the last transaction: ")
+                user.add_tag_to_last_transaction(tag)
+                print("Tag added to the last transaction.")
+            elif user_choice == "7":
+                user_logged_out=True
+                #user_logged_out = True  # Set the flag to indicate user logout
+                #break
+            else:
+                print("\n<<Invalid choice. Please try again.>>")
+
+            if self.check_timeout(last_interaction_time):
+                user_logged_out = True  # Set the flag to indicate user logout
+        return True
 
     def main(self):
         while True:
@@ -281,18 +331,29 @@ class ATM:
                 if user:
                     print("Login successful!")
                     while True:
-                        self.user_menu(user)
-                        if self.check_timeout(last_interaction_time):
-                            break
+                        if user.user_id == "admin":
+                            admin_logged_out = False
+                            while not admin_logged_out:
+                                admin_logged_out = self.admin_menu()
+                                if self.check_timeout(last_interaction_time) or admin_logged_out:
+                                    break
+                        else:
+                            user_logged_out = False
+                            while not user_logged_out:
+                                user_logged_out = self.user_menu(user)
+                                if self.check_timeout(last_interaction_time) or user_logged_out:
+                                    break
+                        break
             elif choice == "3":
                 admin_id = input("Enter Admin ID: ")
                 admin_password = input("Enter Admin Password: ")
                 admin = self.login(admin_id, admin_password)
                 if admin:
                     print("Admin Login successful!")
-                    while True:
-                        self.admin_menu()
-                        if self.check_timeout(last_interaction_time):
+                    admin_logged_out = False
+                    while not admin_logged_out:
+                        admin_logged_out = self.admin_menu()
+                        if self.check_timeout(last_interaction_time) or admin_logged_out:
                             break
             elif choice == "4":
                 print("\nThank you for using the ATM. Goodbye!")
@@ -316,4 +377,3 @@ class ATM:
 if __name__ == "__main__":
     atm = ATM()
     atm.main()
-
